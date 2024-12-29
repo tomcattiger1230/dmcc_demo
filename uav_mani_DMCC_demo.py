@@ -21,13 +21,13 @@ if __name__ == "__main__":
         prog="DMCC Demo", description="UAV DMCC trajectory planner"
     )
     parser.add_argument(
-        "--task", type=str, choices=["cpc_only", "fixed_point"], default="cpc_only"
+        "--task", type=str, choices=["drone_racing", "fixed_point_contact"], default="drone_racing"
     )
     args = parser.parse_args()
-    task = args.task  # cpc_only, fixed_point
+    task = args.task  
     print("mission: {}".format(task))
 
-    if task == "cpc_only":
+    if task == "drone_racing":
         start_point = [0.0, 0.0, 0.55]  # x,y,z [m]
         end_point = [2.5, 0, 0.55]  # x,y,z [m]
         waypoints = np.array(
@@ -221,7 +221,7 @@ if __name__ == "__main__":
         obj.showPath_XZplane()
         obj.showPath_3D()
 
-    elif task == "fixed_point":
+    elif task == "fixed_point_contact":
 
         def fixed_ref_fct(x_o, w, R, direction=1):
             dt = ca.SX.sym("dt")
