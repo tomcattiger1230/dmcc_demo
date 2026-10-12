@@ -9,13 +9,14 @@ Note: This file uses four forces to control the quadrotors, considering montage
 offset of the manipulator
 """
 
-import numpy as np
-import casadi as ca
 from copy import deepcopy
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
+
+import casadi as ca
 import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import cm
+from mpl_toolkits.mplot3d import Axes3D
 
 
 class DMCC_base(object):
@@ -57,19 +58,13 @@ class DMCC_base(object):
         phi = angle[0]
         theta = angle[1]
         psi = angle[2]
-        Rz = np.array(
-            [[ca.cos(psi), -ca.sin(psi), 0], [ca.sin(psi), ca.cos(psi), 0], [0, 0, 1]]
-        )
-        Ry = np.array(
-            [
-                [ca.cos(theta), 0, ca.sin(theta)],
-                [0, 1, 0],
-                [-ca.sin(theta), 0, ca.cos(theta)],
-            ]
-        )
-        Rx = np.array(
-            [[1, 0, 0], [0, ca.cos(phi), -ca.sin(phi)], [0, ca.sin(phi), ca.cos(phi)]]
-        )
+        # Works for symbolic SX and numeric DM without mixed NumPy arrays.
+        Rz = ca.vertcat(ca.horzcat(ca.cos(psi), -ca.sin(psi), 0),
+                       ca.horzcat(ca.sin(psi), ca.cos(psi), 0), ca.horzcat(0, 0, 1))
+        Ry = ca.vertcat(ca.horzcat(ca.cos(theta), 0, ca.sin(theta)), ca.horzcat(0, 1, 0),
+                       ca.horzcat(-ca.sin(theta), 0, ca.cos(theta)))
+        Rx = ca.vertcat(ca.horzcat(1, 0, 0), ca.horzcat(0, ca.cos(phi), -ca.sin(phi)),
+                       ca.horzcat(0, ca.sin(phi), ca.cos(phi)))
         eRb = ca.mtimes([Rz, Ry, Rx])
         return eRb
 
@@ -176,35 +171,8 @@ class DMCC_base(object):
             1,
         ), "input size should be (3, 1)"
 
-        def rotation_matrix(angle):
-            phi = angle[0]
-            theta = angle[1]
-            psi = angle[2]
-            Rz = np.array(
-                [
-                    [ca.cos(psi), -ca.sin(psi), 0],
-                    [ca.sin(psi), ca.cos(psi), 0],
-                    [0, 0, 1],
-                ]
-            )
-            Ry = np.array(
-                [
-                    [ca.cos(theta), 0, ca.sin(theta)],
-                    [0, 1, 0],
-                    [-ca.sin(theta), 0, ca.cos(theta)],
-                ]
-            )
-            Rx = np.array(
-                [
-                    [1, 0, 0],
-                    [0, ca.cos(phi), -ca.sin(phi)],
-                    [0, ca.sin(phi), ca.cos(phi)],
-                ]
-            )
-            return ca.mtimes([Rz, Ry, Rx])
-
-        r_1 = rotation_matrix(rpy_1)
-        r_2 = rotation_matrix(rpy_2)
+        r_1 = DMCC_base.rotation_matrix(rpy_1)
+        r_2 = DMCC_base.rotation_matrix(rpy_2)
         # return ca.trace(np.diag([1, 1, 1]) - ca.mtimes([r_1.T, r_2])) / dt
         # return ca.inv_skew(ca.mtimes([r_1.T, (r_2 - r_1)])) / dt
         return ca.inv_skew(ca.mtimes([r_1.T, r_2]) - np.diag([1, 1, 1])) / dt
@@ -300,7 +268,7 @@ class DMCC_base(object):
         d_q = state_2 - state_1
 
         for i in range(0, 3):
-            q[i + num_state] = d_q[i - 3] / dt
+            q[i + num_state] = d_q[i] / dt
 
         q[num_state + 3 : num_state + 6] = self.difference_rpy(
             state_1[3:6], state_2[3:6], dt
@@ -357,9 +325,18 @@ class DMCC_base(object):
         i_switch=None,
         num_waypoints=None,
     ):
-        self.init_pose = current_pose
+        self.init_pose = np.array(current_pose, dtype=float, copy=True).ravel()
         print("the current position of the UAV:\n", self.init_pose)
-        self.Wp_ref = waypoints
+        self.Wp_ref = np.array(waypoints, dtype=float, copy=True)
+        if (self.Wp_ref.ndim != 2 or not len(self.Wp_ref)
+                or self.Wp_ref.shape[1] != len(self.init_pose)
+                or len(self.init_pose) not in (12, 14)
+                or not np.isfinite(self.Wp_ref).all() or not np.isfinite(self.init_pose).all()):
+            raise ValueError('Provide matching finite full start/reference states')
+        if avg_vel is not None and avg_vel <= 0:
+            raise ValueError('Initial average speed must be positive')
+        if waypoint_distance <= 0 or (dt_waypoint is not None and dt_waypoint <= 0):
+            raise ValueError('Initial grid spacing must be positive')
         print("the points that the UAV should be passed:\n", self.Wp_ref)
         self.num_def_point = waypoints.shape[0]
         print("num of way points: %d" % self.num_def_point)
@@ -372,11 +349,10 @@ class DMCC_base(object):
             dist += [
                 dist[i]
                 + np.linalg.norm(
-                    self.Wp_ref[i + 1, :2].flatten() - self.Wp_ref[i, :2].flatten()
+                    self.Wp_ref[i + 1, :3].flatten() - self.Wp_ref[i, :3].flatten()
                 )
             ]
-        if avg_vel is not None:
-            self.initial_time_speed_guess(dist[-1], avg_vel=avg_vel)
+        self.initial_time_speed_guess(dist[-1], avg_vel=avg_vel)
 
         if num_waypoints is None:
             if dt_waypoint is not None:
@@ -385,15 +361,22 @@ class DMCC_base(object):
                 self.num_waypoints = int(np.ceil(dist[-1] / waypoint_distance))
         else:
             self.num_waypoints = num_waypoints
+        if self.num_waypoints < max(3, self.num_def_point+1):
+            raise ValueError('Need enough nodes for distinct waypoint switches')
 
         if i_switch is None:
             self.i_switch = np.array(
-                self.num_waypoints * np.array(dist) / dist[-1], dtype=int
+                (self.num_waypoints-1) * np.array(dist) / dist[-1], dtype=int
             )
+            for j in range(self.num_def_point):
+                lower = self.i_switch[j-1]+1 if j else 1
+                upper = self.num_waypoints-1-(self.num_def_point-1-j)
+                self.i_switch[j] = max(lower, min(self.i_switch[j], upper))
         else:
-            self.i_switch = i_switch
-        if self.num_waypoints <= self.i_switch[-1]:
-            self.num_waypoints += 1
+            self.i_switch = np.asarray(i_switch, dtype=int)
+            if (self.i_switch.shape != (self.num_def_point,) or np.any(np.diff(self.i_switch) <= 0)
+                    or self.i_switch[0] < 0 or self.i_switch[-1] >= self.num_waypoints):
+                raise ValueError('Waypoint switch indices must be increasing and inside the grid')
         print("dist is {}".format(dist))
         print("i_switch is {}".format(self.i_switch))
         print("we have {0} waypoints".format(self.num_waypoints))
@@ -430,6 +413,12 @@ class DMCC_base(object):
         if self.has_contact_target:
             kappa0 = self.kappa_0 * np.ones(self.num_waypoints)
             epsilon_param0 = np.zeros(self.num_waypoints - 1)
+            if not np.isfinite(self.kappa_0) or not 0 < self.kappa_0 <= self.num_waypoints-1:
+                raise ValueError('Contact progress must fit in the available intervals')
+            count = int(np.ceil(self.kappa_0))
+            first = min(int(self.i_switch[0]), self.num_waypoints-1-count)
+            epsilon_param0[first:first+count] = np.minimum(1., self.kappa_0-np.arange(count))
+            kappa0[1:] = self.kappa_0-np.cumsum(epsilon_param0)
             for i in range(self.num_waypoints):
                 if i > self.i_switch[i_wp]:
                     i_wp += 1
@@ -446,15 +435,8 @@ class DMCC_base(object):
                     interp = i / (self.i_switch[0] + 1e-6)
 
                 pos_guess = (1 - interp) * wp_last + interp * wp_next
-                vel_guess = (
-                    (
-                        self.vel_guess
-                        * (wp_next - wp_last)
-                        / ca.norm_2(wp_next - wp_last)
-                    )
-                    .full()
-                    .flatten()
-                )
+                displacement = wp_next - wp_last
+                vel_guess = self.vel_guess * displacement / max(np.linalg.norm(displacement), 1e-12)
                 if x0 is None:
                     x0 = self.init_pose
                 else:
@@ -520,15 +502,6 @@ class DMCC_base(object):
                                 ]
                             ),
                         )
-                if i == self.i_switch[0]:
-                    kappa0[i] = self.kappa_0 - 1
-                    epsilon_param0[i] = 1
-                    j = i
-                    while kappa0[j] != 0:
-                        kappa0[j + 1] = kappa0[j] - 1
-                        j = j + 1
-                        epsilon_param0[j] = 1
-                    kappa0[i + self.kappa_0 - 1 :] = 0
             x0 = x0.reshape(-1, self.Wp_ref.shape[1])
             self.x_guess = x0
             print("kappa_0: {}".format(kappa0))
@@ -579,11 +552,8 @@ class DMCC_base(object):
                     interp = i / (self.i_switch[0] + 1e-6)
 
                 pos_guess = (1 - interp) * wp_last + interp * wp_next
-                vel_guess = (
-                    self.vel_guess * (wp_next - wp_last) / ca.norm_2(wp_next - wp_last)
-                )
-                # due to new numpy version, squeeze is needed (DM to array)
-                vel_guess = np.array(vel_guess).squeeze()
+                displacement = wp_next - wp_last
+                vel_guess = self.vel_guess * displacement / max(np.linalg.norm(displacement), 1e-12)
                 if x0 is None:
                     x0 = self.init_pose
                 else:
@@ -661,16 +631,7 @@ class DMCC_base(object):
             self.x_guess = x0
             print("x guess: ", self.x_guess)
             print("time guess: ", self.time_guess)
-            # refit the reference points
-            for i in range(self.i_switch.shape[0]):
-                if num_state == 6:
-                    self.Wp_ref[i, [6, 7, 8]] = self.x_guess[
-                        self.i_switch[i], [6, 7, 8]
-                    ]
-                if num_state == 7:
-                    self.Wp_ref[i, [7, 8, 9]] = self.x_guess[
-                        self.i_switch[i], [7, 8, 9]
-                    ]
+            # Initial guesses must not overwrite requested reference velocities.
             lambda0 = np.array(lambda0).reshape(
                 self.num_waypoints, (self.num_def_point)
             )
@@ -695,16 +656,18 @@ class DMCC_base(object):
         self.target_velocity_func = traj_vel_function
 
     def get_velocity(self, num_state=6):
+        q0, q1, h = ca.SX.sym('q0', num_state), ca.SX.sym('q1', num_state), ca.SX.sym('h')
+        rate = ca.Function('export_rate', [q0, q1, h],
+                           [self.average_velocity(q0, q1, h, num_state=num_state)])
         velocity_list = [self.init_pose[num_state:].flatten()]
         x_ = self.X_state.copy()
         for i in range(1, self.num_waypoints - 1):
             velocity_list.append(
-                self.average_velocity(
+                rate(
                     x_[i].reshape(-1, 1),
                     x_[i + 1].reshape(-1, 1),
                     self.result_tn / (self.num_waypoints - 1),
-                    num_state=num_state,
-                ).flatten()
+                ).full().flatten()
             )
 
         velocity_list.append(self.Wp_ref[-1][num_state:].flatten())
@@ -1065,7 +1028,7 @@ class DMCC_base(object):
 
         ax.plot(self.X_state[:, 0], self.X_state[:, 1], self.X_state[:, 2], "k-")
         ax.scatter(
-            self.traj_manip[:, 0], self.traj_manip[:, 1], self.traj_manip[:, 2], "go"
+            self.traj_manip[:, 0], self.traj_manip[:, 1], self.traj_manip[:, 2], color="g", marker="o"
         )
 
         if self.has_contact_target:

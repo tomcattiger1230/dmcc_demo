@@ -1,0 +1,42 @@
+{
+  "tests": {
+    "unittest_passed": 15,
+    "plot_export_tasks_passed": 2
+  },
+  "scenarios": [
+    {
+      "task": "drone_racing",
+      "dynamics_convention": "euler_consistent",
+      "objective_mode": "minimum_time",
+      "nodes": 53,
+      "total_time": 10.736980273100567,
+      "solve_seconds": 0.7679581250013143,
+      "status": "Solve_Succeeded",
+      "success": true,
+      "max_constraint_violation": 9.87344988927219e-09,
+      "terminal_velocity_reference": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "continuous_replay_performed": false
+    },
+    {
+      "task": "fixed_point_contact",
+      "dynamics_convention": "euler_consistent",
+      "objective_mode": "minimum_time",
+      "nodes": 27,
+      "total_time": 2.4218356066966855,
+      "solve_seconds": 2.065268291000393,
+      "status": "Solve_Succeeded",
+      "success": true,
+      "max_constraint_violation": 1.7323054102291735e-10,
+      "terminal_velocity_reference": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "continuous_replay_performed": false
+    }
+  ]
+}
